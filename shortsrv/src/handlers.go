@@ -11,9 +11,17 @@ import (
 // ShortUrlPutHandler handles PUT /s.
 // URL: /s?urlinbase64=<base64url-encoded-long-url>
 // Parameters: query parameter "urlinbase64", encoded with base64.RawURLEncoding.
+// Example request:
+//   PUT /s?urlinbase64=aHR0cHM6Ly9leGFtcGxlLmNvbS9kb2NzP2lkPTQy
+// Example decoded value:
+//   https://example.com/docs?id=42
 // Returns: 200 with the generated short ID as plain text.
+// Example success response body:
+//   Qk7x2LmN
 // Errors: 400 "invalid url" when the query value cannot be decoded, 500 "invalid url" when storage fails.
-// Behavior: decodes the long URL, stores it in etcd, and returns the generated short ID.
+// Example error response body:
+//   invalid url
+// Behavior: decodes the long URL, stores it in etcd under <prefix>/<short-id>, and returns the generated short ID.
 func ShortUrlPutHandler(w http.ResponseWriter, r *http.Request) {
 	urlb64 := r.URL.Query().Get(URLInBase64Param)
 	lurl, err := base64.RawURLEncoding.DecodeString(urlb64)
@@ -37,7 +45,15 @@ func ShortUrlPutHandler(w http.ResponseWriter, r *http.Request) {
 // ShortUrlGetHandler handles GET /s/{surlid}.
 // URL: /s/{surlid}
 // Parameters: path parameter "surlid", the short ID returned by PUT /s.
+// Example request:
+//   GET /s/Qk7x2LmN
+// Example stored record:
+//   key: wshort/Qk7x2LmN
+//   value: {"long_url":"https://example.com/docs?id=42","id":"Qk7x2LmN","creation":"2026-04-10T12:00:00Z","last_access":"2026-04-10T12:00:00Z"}
 // Returns: 301 with a Location header pointing to the original URL and body "301 Moved".
+// Example success headers/body:
+//   Location: https://example.com/docs?id=42
+//   301 Moved
 // Errors: 500 when the short ID cannot be loaded from etcd.
 // Behavior: fetches the stored long URL, updates LastAccess in etcd, and redirects the client.
 func ShortUrlGetHandler(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +76,11 @@ func ShortUrlGetHandler(w http.ResponseWriter, r *http.Request) {
 // DebugHandler handles GET /debug.
 // URL: /debug
 // Parameters: none.
+// Example request:
+//   GET /debug
 // Returns: 200 with an empty body.
+// Example log output:
+//   k=Qk7x2LmN, v={https://example.com/docs?id=42 Qk7x2LmN 2026-04-10 12:00:00 +0000 UTC 2026-04-10 12:01:30 +0000 UTC}
 // Behavior: dumps all stored short-link records to the server log for inspection.
 func DebugHandler(w http.ResponseWriter, r *http.Request) {
 	ws.DumpData()
