@@ -1,0 +1,215 @@
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#   name: shortsrv
+# delete this to avoid secret get deleted every time when 
+---
+# etcd statefuleset + service
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-svc
+  namespace: shortsrv
+spec:
+  selector: 
+    app: etcd-pod
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+    - name: peer
+      port: 2380
+      targetPort: 2380
+  clusterIP: None
+
+apiVersion: v1
+kind: Service
+metadata: 
+  name: etcd-client
+  namespace: shortsrv
+spec:
+  selector:
+    app: etcd-pod
+  type: ClusterIP
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd-set
+  namespace: shortsrv
+spec:
+  serviceName: etcd-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd-pod
+  template:
+    metadata:
+      labels:
+        app: etcd-pod
+    spec:
+      containers:
+        - name: etcd
+          image: ccr.ccs.tencentyun.com/grc.io/etcd:v3.3.9
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          command:
+            - /usr/local/bin/etcd
+          args:
+            - --name=$(POD_NAME)
+            - --data-dir=/var/lib/etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(POD_NAME).etcd-svc.$(POD_NAMESPACE).svc.cluster.local:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://$(POD_NAME).etcd-svc.$(POD_NAMESPACE).svc.cluster.local:2380
+            - --initial-cluster=$(POD_NAME)=http://$(POD_NAME).etcd-svc.$(POD_NAMESPACE).svc.cluster.local:2380
+            - --initial-cluster-token=etcd-cluster-1
+            - --initial-cluster-state=new
+          volumeMounts:
+            - name: etcd-vol
+              mountPath: /var/lib/etcd
+  volumeClaimTemplates:
+    - metadata:
+        name: etcd-vol
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path # need to install local-path-provisioner
+        resources:
+          requests:
+            storage: 1Gi
+---
+# nginx gateway
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: shortsrv
+  name: nginx-gateway-conf
+data:
+  default.conf: | 
+    upstream api_backend {
+      server shortsrv-api-server.shortsrv.svc.cluster.local:80;
+    }
+    
+    server {
+      listen 80;
+      server_name _;
+      location / {
+        proxy_pass        http://api_backend;
+        proxy_set_header  HOST $host;
+        proxy_set_header  X-Real-IP $remote_addr;
+        proxy_set_header  X-Forwarded-Proto $scheme;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-gateway
+  namespace: shortsrv
+  labels:
+    app: nginx-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels: 
+      app: nginx-gateway
+  template:
+    metadata:
+      labels:
+        app: nginx-gateway
+    spec:
+      containers:
+        - name: nginx-gateway
+          image: ccr.ccs.tencentyun.com/qcloud/nginx:1.9
+          ports: 
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-gateway-conf-vol
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+      volumes:
+        - name: nginx-gateway-conf-vol
+          configMap:
+            name: nginx-gateway-conf
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-gateway
+  namespace: shortsrv
+spec:
+  selector:
+    app: nginx-gateway
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080
+---
+# shortsrv 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shortsrv
+  namespace: shortsrv
+  labels:
+    app: shortsrv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shortsrv
+  template: 
+    metadata:
+      labels:
+        app: shortsrv
+    spec:
+      imagePullSecrets:
+        - name: tencent-ccr-secret
+      containers:
+        - name: shortsrv
+          image: ccr.ccs.tencentyun.com/hhlrepo/shortsrv:latest
+          ports: 
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shortsrv-api-server
+  namespace: shortsrv
+spec:
+  type: ClusterIP
+  selector:
+    app: shortsrv
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP

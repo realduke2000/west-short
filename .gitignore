@@ -1,2 +1,6 @@
 src/go/bin/*
 .vscode/
+shortsrv/bin/
+shortsrv/src/repo/
+shortsrv/src/vendor/
+shortsrv/deploy/repo/shortsrv
